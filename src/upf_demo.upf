@@ -1,0 +1,152 @@
+# Определение главного модуля:
+set_design_top upf_demo
+set_scope .
+
+# Создание домен PD_top: все элементы главного модуля
+# включаются PD_top:
+create_power_domain PD_top \
+    -include_scope
+# Создание домена PD_sw,
+# перенос sum_acc_1 в домен PD_sw:
+create_power_domain PD_sw \
+    -elements {sum_acc_1}
+
+# Создание портов питания:
+create_supply_port VDD_1
+create_supply_port VDD_2
+create_supply_port GND
+
+# Создание цепей питания:
+create_supply_net vdd_1_n \
+    -domain PD_top
+create_supply_net vdd_2_n \
+    -domain PD_top
+create_supply_net gnd_n \
+    -domain PD_top
+
+# Подключение цепей питания к портам:
+connect_supply_net vdd_1_n \
+    -ports VDD_1
+connect_supply_net vdd_2_n \
+    -ports VDD_2
+connect_supply_net gnd_n \
+    -ports GND
+
+# Группировка цепей питания в набор pwr_1_ss:
+create_supply_set pwr_1_ss \
+    -function {power vdd_1_n} \
+    -function {ground gnd_n}
+# Назначение группы pwr_1_ss в
+# качестве основного набора питания для PD_top:
+associate_supply_set pwr_1_ss \
+    -handle PD_top.primary
+
+# Группировка цепей питания в набор pwr_2_ss:
+create_supply_set pwr_2_ss \
+    -function {power vdd_2_n} \
+    -function {ground gnd_n}
+
+# Создание группы цепей питания
+# для подключения к PD_sw:
+create_supply_net sw_vdd_2_n \
+    -domain PD_top
+create_supply_set sw_pwr_2_ss \
+    -function {power sw_vdd_2_n} \
+    -function {ground gnd_n}
+# Назначение группы sw_pwr_2_ss в качестве
+# основного набора питания для PD_sw:
+associate_supply_set sw_pwr_2_ss \
+    -handle PD_sw.primary
+
+# Создание модели ключа sw_2, управляемого
+# RTL-сигналом w_d1_sw_disable:
+create_power_switch sw_2 \
+    -domain PD_sw \
+    -input_supply_port \
+        {SW_IN pwr_2_ss.power} \
+    -output_supply_port \
+        {SW_OUT sw_pwr_2_ss.power} \
+    -control_port \
+        {SW_DIS w_d1_sw_disable} \
+    -on_state \
+        {ON_STATE SW_IN {!SW_DIS}} \
+    -off_state {OFF_STATE {SW_DIS}}
+
+# Создание стратегии по автоматическому
+# добавлению входных для PD_sw блоков изменения
+# уровня напряжения сигналов:
+set_level_shifter ls_pd_sw_in \
+    -domain PD_sw \
+    -applies_to inputs \
+    -rule low_to_high \
+    -location self
+# Подключение питания к входным блокам изменения
+# уровня напряжения сигналов:
+associate_supply_set pwr_1_ss \
+    -handle PD_sw.ls_pd_sw_in.input
+associate_supply_set pwr_2_ss \
+    -handle PD_sw.ls_pd_sw_in.output
+# Создание стратегии по автоматическому
+# добавлению выходных для PD_sw блоков изменения
+# уровня напряжения сигналов:
+set_level_shifter ls_pd_sw_out \
+    -domain PD_sw \
+    -applies_to outputs \
+    -rule high_to_low \
+    -location parent
+# Подключение питания к выходным блокам изменения
+# уровня напряжения сигналов:
+associate_supply_set pwr_2_ss \
+    -handle PD_sw.ls_pd_sw_out.input
+associate_supply_set pwr_1_ss \
+    -handle PD_sw.ls_pd_sw_out.output
+
+# Создание стратегии по добавлению блоков изоляции
+# с точным указанием изолируемых элементов:
+set_isolation pd_sw_iso \
+    -domain PD_sw \
+    -clamp_value latch \
+    -isolation_signal w_iso_en \
+    -isolation_sense high \
+    -location parent \
+    -elements {sum_acc_1/out}
+# Подключение питания к блокам изоляции:
+associate_supply_set pwr_1_ss \
+    -handle PD_sw.default_isolation
+
+# Создание стратегии по автоматическому добавлению
+# блоков сохранения для всех регистров
+# домена PD_sw (управление RTL-сигналами
+# w_ret_save и w_ret_restore):
+set_retention pd_sw_ret \
+    -domain PD_sw \
+    -save_signal {w_ret_save posedge} \
+    -restore_signal {w_ret_restore posedge}
+# Подключение питания к регистрам сохранения:
+associate_supply_set pwr_2_ss \
+    -handle PD_sw.default_retention
+
+# Определение состояний портов питания
+#(согласно таблице 1):
+add_port_state VDD_1 \
+    -state {ON_1 1.0} \
+    -state {OFF_ST OFF}
+add_port_state VDD_2 \
+    -state {ON_2 2.0} \
+    -state {OFF_ST OFF}
+add_port_state sw_2/SW_OUT \
+    -state {ON_2 2.0} \
+    -state {OFF_ST OFF}
+add_port_state GND \
+    -state {ON_0 0}
+# Описание таблицы 1 в формате UPF (таблица
+# используется для верификации работы блока
+# управления питанием):
+create_pst DEMO_PST \
+    -supplies {VDD_1 VDD_2 sw_2/SW_OUT GND}
+add_pst_state FULL_ON -pst DEMO_PST \
+    -state {ON_1 ON_2 ON_2 ON_0}
+add_pst_state PART_ON -pst DEMO_PST \
+    -state {ON_1 ON_2 OFF_ST ON_0}
+add_pst_state FULL_OFF -pst DEMO_PST \
+    -state {OFF_ST OFF_ST OFF_ST ON_0}
